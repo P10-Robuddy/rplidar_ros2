@@ -35,6 +35,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <std_srvs/srv/empty.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include "rplidar.h"
 
 #include <signal.h>
@@ -64,15 +65,15 @@ class RPLidarScanPublisher : public rclcpp::Node
   private:    
     void init_param()
     {
-        this->declare_parameter("channel_type");
-        this->declare_parameter("tcp_ip");
-        this->declare_parameter("tcp_port");
-        this->declare_parameter("serial_port");
-        this->declare_parameter("serial_baudrate");
-        this->declare_parameter("frame_id");
-        this->declare_parameter("inverted");
-        this->declare_parameter("angle_compensate");
-        this->declare_parameter("scan_mode");
+        this->declare_parameter<std::string>("channel_type", "serial");
+        this->declare_parameter<std::string>("tcp_ip","192.168.0.7");
+        this->declare_parameter<int>("tcp_port",20108);
+        this->declare_parameter<std::string>("serial_port","/dev/ttyUSB0");
+        this->declare_parameter<int>("serial_baudrate",115200);
+        this->declare_parameter<std::string>("frame_id","laser_frame");
+        this->declare_parameter<bool>("inverted",false);
+        this->declare_parameter<bool>("angle_compensate",false);
+        this->declare_parameter<std::string>("scan_mode", std::string());
 
         this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
         this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7"); 
@@ -133,47 +134,94 @@ class RPLidarScanPublisher : public rclcpp::Node
         }
     }
 
-    bool stop_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
-                    std::shared_ptr<std_srvs::srv::Empty::Response> res)
-    {
-        (void)req;
-        (void)res;
+    // bool stop_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
+    //                 std::shared_ptr<std_srvs::srv::Empty::Response> res)
+    // {
+    //     (void)req;
+    //     (void)res;
 
-        if(!drv)
-            return false;
+    //     if(!drv)
+    //         return false;
 
-        RCLCPP_DEBUG(this->get_logger(),"Stop motor");
-        drv->stopMotor();
-        return true;
-    }
+    //     RCLCPP_DEBUG(this->get_logger(),"Stop motor");
+    //     drv->stopMotor();
+    //     return true;
+    // }
 
-    bool start_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
-                    std::shared_ptr<std_srvs::srv::Empty::Response> res)
-    {
-        (void)req;
-        (void)res;
+    // bool start_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
+    //                 std::shared_ptr<std_srvs::srv::Empty::Response> res)
+    // {
+    //     (void)req;
+    //     (void)res;
 
-        if(!drv)
-           return false;
-        if(drv->isConnected())
-        {
-            RCLCPP_DEBUG(this->get_logger(),"Start motor");
-            u_result ans=drv->startMotor();
-            if (IS_FAIL(ans)) {
-                RCLCPP_WARN(this->get_logger(), "Failed to start motor: %08x", ans);
-                return false;
-            }
+    //     if(!drv)
+    //        return false;
+    //     if(drv->isConnected())
+    //     {
+    //         RCLCPP_DEBUG(this->get_logger(),"Start motor");
+    //         u_result ans=drv->startMotor();
+    //         if (IS_FAIL(ans)) {
+    //             RCLCPP_WARN(this->get_logger(), "Failed to start motor: %08x", ans);
+    //             return false;
+    //         }
         
-            ans=drv->startScan(0,1);
-            if (IS_FAIL(ans)) {
-                RCLCPP_WARN(this->get_logger(), "Failed to start scan: %08x", ans);
-            }
-        } else {
-            RCLCPP_INFO(this->get_logger(),"lost connection");
+    //         ans=drv->startScan(0,1);
+    //         if (IS_FAIL(ans)) {
+    //             RCLCPP_WARN(this->get_logger(), "Failed to start scan: %08x", ans);
+    //         }
+    //     } else {
+    //         RCLCPP_INFO(this->get_logger(),"lost connection");
+    //         return false;
+    //     }
+
+    //     return true;
+    // }
+
+    bool toggle_motor(const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+                            std::shared_ptr<std_srvs::srv::SetBool::Response> res)
+    {
+        bool turn_on = req->data;
+
+        if (!drv) {
+            res->success = false;
+            res->message = "Driver not connected";
             return false;
         }
+        
+        if (turn_on) 
+        {
+            // start the motor
+            if(drv->isConnected())
+            {
+                RCLCPP_DEBUG(this->get_logger(),"Start motor");
+                u_result ans=drv->startMotor();
+                if (IS_FAIL(ans)) {
+                    RCLCPP_WARN(this->get_logger(), "Failed to start motor: %08x", ans);
+                    res->success = false;
+                    res->message = "Could not start motor";
+                    return false;
+                }
+            
+                ans=drv->startScan(0,1);
+                if (IS_FAIL(ans)) {
+                    RCLCPP_WARN(this->get_logger(), "Failed to start scan: %08x", ans);
+                }
+            } else {
+                RCLCPP_INFO(this->get_logger(),"lost connection");
+                res->success = false;
+                res->message = "Connection lost";
+                return false;
+            }
 
-        return true;
+            res->success = true;
+            return true;
+        } else {
+            // stop the motor
+            RCLCPP_DEBUG(this->get_logger(),"Stop motor");
+            drv->stopMotor();
+            res->success = true;
+            return true;
+        }
     }
 
     static float getAngle(const rplidar_response_measurement_node_hq_t& node)
@@ -290,10 +338,13 @@ public:
             return -1;
         }
 
-        stop_motor_service = this->create_service<std_srvs::srv::Empty>("stop_motor",  
-                                std::bind(&RPLidarScanPublisher::stop_motor,this,std::placeholders::_1,std::placeholders::_2));
-        start_motor_service = this->create_service<std_srvs::srv::Empty>("start_motor", 
-                                std::bind(&RPLidarScanPublisher::start_motor,this,std::placeholders::_1,std::placeholders::_2));
+        // stop_motor_service = this->create_service<std_srvs::srv::Empty>("stop_motor",  
+        //                         std::bind(&RPLidarScanPublisher::stop_motor,this,std::placeholders::_1,std::placeholders::_2));
+        // start_motor_service = this->create_service<std_srvs::srv::Empty>("start_motor", 
+        //                         std::bind(&RPLidarScanPublisher::start_motor,this,std::placeholders::_1,std::placeholders::_2));
+
+        toggle_motor_service = this->create_service<std_srvs::srv::SetBool>("rplidar_scan_publisher/toggle_motor",  
+                                std::bind(&RPLidarScanPublisher::toggle_motor,this,std::placeholders::_1,std::placeholders::_2));
 
         drv->startMotor();
 
@@ -434,8 +485,9 @@ public:
 
   private:
     rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub;
-    rclcpp::Service<std_srvs::srv::Empty>::SharedPtr start_motor_service;
-    rclcpp::Service<std_srvs::srv::Empty>::SharedPtr stop_motor_service;
+    // rclcpp::Service<std_srvs::srv::Empty>::SharedPtr start_motor_service;
+    // rclcpp::Service<std_srvs::srv::Empty>::SharedPtr stop_motor_service;
+    rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr toggle_motor_service;
 
     std::string channel_type;
     std::string tcp_ip;
